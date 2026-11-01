@@ -1,0 +1,8 @@
+help
+uname
+ls /
+cat /proc/cpuinfo
+cat /proc/meminfo
+primes 5000
+memtouch 256 4
+pingpong 50 8

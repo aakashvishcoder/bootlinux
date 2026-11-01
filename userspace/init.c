@@ -131,6 +131,62 @@ static void cmd_memtouch(int argc, char **argv)
 	out(" rounds, checksum "); out_num(sum); out("\n");
 }
 
+static unsigned int touch_pages(volatile unsigned int *p, unsigned long pages, unsigned int salt)
+{
+	unsigned int sum = 0;
+	for (unsigned long i = 0; i < pages; i++) {
+		p[i * 1024] += salt;
+		sum += p[i * 1024];
+	}
+	return sum;
+}
+
+/*
+ * pingpong ROUNDS [PAGES]: fork a child and bounce a byte between the two
+ * processes through a pair of pipes. Each side touches PAGES of its own
+ * pages per round, so every round is two context switches between address
+ * spaces that both want their TLB entries. This is the workload where
+ * ASIDs matter: without them, every switch must flush the TLB.
+ */
+static void cmd_pingpong(int argc, char **argv)
+{
+	unsigned long rounds = argc > 1 ? atoi(argv[1]) : 200;
+	unsigned long pages = argc > 2 ? atoi(argv[2]) : 8;
+	int to_child[2], to_parent[2];
+	if (pipe(to_child) || pipe(to_parent)) { err("pingpong: pipe failed\n"); return; }
+
+	unsigned long len = pages * 4096;
+	volatile unsigned int *mem = mmap(0, len, PROT_READ | PROT_WRITE,
+					  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (mem == MAP_FAILED) { err("pingpong: mmap failed\n"); return; }
+
+	pid_t pid = fork();
+	if (pid < 0) { err("pingpong: fork failed\n"); return; }
+	char b = 0;
+	if (pid == 0) {
+		/* child: its copy of `mem` becomes private on first write */
+		for (unsigned long r = 0; r < rounds; r++) {
+			if (read(to_child[0], &b, 1) != 1) break;
+			touch_pages(mem, pages, r);
+			write(to_parent[1], &b, 1);
+		}
+		exit(0);
+	}
+	unsigned int sum = 0;
+	for (unsigned long r = 0; r < rounds; r++) {
+		write(to_child[1], &b, 1);
+		if (read(to_parent[0], &b, 1) != 1) break;
+		sum += touch_pages(mem, pages, r);
+	}
+	int status;
+	waitpid(pid, &status, 0);
+	close(to_child[0]); close(to_child[1]);
+	close(to_parent[0]); close(to_parent[1]);
+	munmap((void *)mem, len);
+	out("pingpong: "); out_num(rounds); out(" rounds, "); out_num(pages);
+	out(" pages per side, checksum "); out_num(sum); out("\n");
+}
+
 /* primes N: a compute-bound workload that stays on a handful of pages. */
 static void cmd_primes(int argc, char **argv)
 {
@@ -147,7 +203,8 @@ static void cmd_primes(int argc, char **argv)
 static void help(void)
 {
 	out("commands: help echo cat ls cd pwd uname mkdir\n"
-	    "          primes [N]  memtouch [PAGES] [ROUNDS]  poweroff\n");
+	    "          primes [N]  memtouch [PAGES] [ROUNDS]\n"
+	    "          pingpong [ROUNDS] [PAGES]  poweroff\n");
 }
 
 static void run(int argc, char **argv)
@@ -166,6 +223,7 @@ static void run(int argc, char **argv)
 	else if (!strcmp(c, "mkdir")) { if (argc < 2 || mkdir(argv[1], 0755)) err("mkdir: failed\n"); }
 	else if (!strcmp(c, "primes")) cmd_primes(argc, argv);
 	else if (!strcmp(c, "memtouch")) cmd_memtouch(argc, argv);
+	else if (!strcmp(c, "pingpong")) cmd_pingpong(argc, argv);
 	else if (!strcmp(c, "poweroff")) {
 		out("powering off\n");
 		my_syscall0(__NR_sync);

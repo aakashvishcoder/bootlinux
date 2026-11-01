@@ -247,6 +247,13 @@ TlbEntry *Cpu::walk(u32 va, Access acc, Priv eff, Tlb &tlb)
 	e.vpn = va >> 12;
 	e.asid = asid();
 	e.ppn = ppn;
+	if (e.super && cfg_.split_superpages) {
+		// Model a TLB without superpage support: cache only the 4 KiB
+		// piece of the megapage that this access touched.
+		e.super = false;
+		e.ppn = (ppn & ~0x3ffu) | vpn[0];
+		stats.split_fills++;
+	}
 	e.pte = pte & 0xff;
 	e.pte_addr = (u32)pte_addr;
 	return tlb.insert(e);
@@ -579,6 +586,12 @@ void Cpu::exec_system(u32 insn)
 			if (priv == PRIV_U || (priv == PRIV_S && (mstatus & MS_TVM))) illegal(insn);
 			u32 rs2 = (insn >> 20) & 31;
 			stats.sfence++;
+			if (cfg_.log_sfence) {
+				auto &s = stats.fence_sites[{pc, x[1]}];
+				s.count++;
+				s.has_va = rs1 != 0;
+				s.has_asid = rs2 != 0;
+			}
 			u32 vpn = x[rs1] >> 12, as = x[rs2] & 0x1ff;
 			itlb.flush(rs1 != 0, vpn, rs2 != 0, as);
 			dtlb.flush(rs1 != 0, vpn, rs2 != 0, as);

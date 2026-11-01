@@ -3,6 +3,8 @@
 #include "common.h"
 #include "devices.h"
 #include "tlb.h"
+#include <map>
+#include <utility>
 
 // mstatus bits
 constexpr u32 MS_SIE = 1u << 1, MS_MIE = 1u << 3, MS_SPIE = 1u << 5,
@@ -19,6 +21,8 @@ struct CpuConfig {
 	int dtlb_entries = 32;
 	int asid_bits = 9;        // 0 disables ASIDs (every satp switch needs a flush)
 	bool builtin_sbi = false; // emulate SBI firmware for S-mode ecalls
+	bool split_superpages = false; // cache 4 MiB pages as 4 KiB TLB entries
+	bool log_sfence = false;  // record which code issues sfence.vma
 };
 
 struct CpuStats {
@@ -32,6 +36,10 @@ struct CpuStats {
 	u64 sfence = 0;
 	u64 sbi_calls = 0;
 	u64 wfi_idle_ticks = 0;     // timer ticks skipped while waiting in WFI
+	u64 split_fills = 0;        // superpage walks cached as a 4 KiB entry
+	// sfence.vma call sites: (pc, return address) -> count, kind
+	struct FenceSite { u64 count = 0; bool has_va = false, has_asid = false; };
+	std::map<std::pair<u32, u32>, FenceSite> fence_sites;
 };
 
 enum class StopReason { None, Shutdown, Reboot, ToHost, Fatal };

@@ -20,6 +20,8 @@ static void usage()
 "  --itlb N           instruction TLB entries (default 32)\n"
 "  --dtlb N           data TLB entries (default 32)\n"
 "  --asid-bits N      0 or 9 (default 9)\n"
+"  --split-superpages TLB caches 4 MiB pages as 4 KiB entries\n"
+"  --sfence-log FILE  write sfence.vma call sites (pc, ra, count)\n"
 "  --script FILE      type each line of FILE at the shell prompt, then exit\n"
 "  --max-insns N      stop after N instructions\n"
 "  --stats FILE       write statistics as JSON\n"
@@ -88,7 +90,7 @@ static void report(const Cpu &c, double secs, FILE *f, bool json);
 
 int main(int argc, char **argv)
 {
-	std::string image, elf, dtb = "build/bootlinux.dtb", script, stats_path;
+	std::string image, elf, dtb = "build/bootlinux.dtb", script, stats_path, sfence_path;
 	u32 ram_mb = 64;
 	u64 max_insns = ~0ull, trace = 0;
 	bool quiet = false;
@@ -103,6 +105,8 @@ int main(int argc, char **argv)
 		else if (a == "--itlb") cfg.itlb_entries = std::stoi(next());
 		else if (a == "--dtlb") cfg.dtlb_entries = std::stoi(next());
 		else if (a == "--asid-bits") cfg.asid_bits = std::stoi(next());
+		else if (a == "--split-superpages") cfg.split_superpages = true;
+		else if (a == "--sfence-log") { sfence_path = next(); cfg.log_sfence = true; }
 		else if (a == "--script") script = next();
 		else if (a == "--max-insns") max_insns = std::stoull(next());
 		else if (a == "--stats") stats_path = next();
@@ -207,6 +211,15 @@ int main(int argc, char **argv)
 		report(cpu, secs, f, true);
 		fclose(f);
 	}
+	if (!sfence_path.empty()) {
+		FILE *f = fopen(sfence_path.c_str(), "w");
+		if (!f) fatal("cannot write " + sfence_path);
+		fprintf(f, "# pc ra count has_va has_asid\n");
+		for (auto &[k, v] : cpu.stats.fence_sites)
+			fprintf(f, "%08x %08x %llu %d %d\n", k.first, k.second,
+				(unsigned long long)v.count, v.has_va, v.has_asid);
+		fclose(f);
+	}
 	return cpu.stop == StopReason::Fatal ? 1 : 0;
 }
 
@@ -241,6 +254,11 @@ static void report(const Cpu &c, double secs, FILE *f, bool json)
 		fprintf(f, "  \"page_faults\": %llu, \"exceptions\": %llu, \"interrupts\": %llu,\n",
 			(unsigned long long)(s.exceptions[12] + s.exceptions[13] + s.exceptions[15]),
 			(unsigned long long)exc, (unsigned long long)irq);
+		fprintf(f, "  \"syscalls\": %llu, \"split_fills\": %llu, \"walks_fetch\": %llu,\n",
+			(unsigned long long)s.exceptions[8], (unsigned long long)s.split_fills,
+			(unsigned long long)s.walks[0]);
+		fprintf(f, "  \"walks_load\": %llu, \"walks_store\": %llu,\n",
+			(unsigned long long)s.walks[1], (unsigned long long)s.walks[2]);
 		fprintf(f, "  \"sbi_calls\": %llu, \"seconds\": %.3f\n}\n",
 			(unsigned long long)s.sbi_calls, secs);
 		return;
