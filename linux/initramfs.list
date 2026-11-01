@@ -1,0 +1,8 @@
+# gen_init_cpio list: the entire root filesystem. Paths are relative to the
+# kernel build directory, which build.sh points at this repo.
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+dir /proc 0555 0 0
+dir /sys 0555 0 0
+dir /tmp 1777 0 0
+file /init BOOTLINUX_ROOT/build/init 0755 0 0
